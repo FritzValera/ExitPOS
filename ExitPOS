@@ -1,0 +1,988 @@
+package com.ipark.parkingpos;
+
+import android.Manifest;
+import android.app.PendingIntent;
+import android.content.Context;
+import android.content.DialogInterface;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import android.graphics.Color;
+import android.nfc.NfcAdapter;
+import android.nfc.Tag;
+import android.nfc.tech.IsoDep;
+import android.nfc.tech.MifareClassic;
+import android.nfc.tech.MifareUltralight;
+import android.nfc.tech.Ndef;
+import android.nfc.tech.NdefFormatable;
+import android.nfc.tech.NfcA;
+import android.nfc.tech.NfcB;
+import android.os.AsyncTask;
+import android.os.Build;
+import android.os.Bundle;
+import android.util.Log;
+import android.view.View;
+import android.widget.AdapterView;
+import android.widget.ArrayAdapter;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.RelativeLayout;
+import android.widget.Spinner;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import androidx.annotation.RequiresApi;
+import androidx.appcompat.app.AlertDialog;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.widget.Toolbar;
+import androidx.coordinatorlayout.widget.CoordinatorLayout;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
+
+import com.dantsu.escposprinter.EscPosPrinter;
+import com.dantsu.escposprinter.connection.bluetooth.BluetoothConnection;
+import com.dantsu.escposprinter.connection.bluetooth.BluetoothPrintersConnections;
+import com.ipark.parkingpos.libraries.Constants;
+import com.ipark.parkingpos.libraries.GlobalFunctions;
+import com.ipark.parkingpos.libraries.SpinnerObject;
+import com.ipark.parkingpos.models.Parkinfo_Model;
+import com.ipark.parkingpos.models.Parktype_Model;
+import com.ipark.parkingpos.models.Rateinfo_Model;
+import com.ipark.parkingpos.models.Receipt_Model;
+import com.ipark.parkingpos.models.Settings_Model;
+import com.zebra.sdk.comm.Connection;
+import com.zebra.sdk.comm.ConnectionException;
+import com.zebra.sdk.printer.PrinterLanguage;
+import com.zebra.sdk.printer.PrinterStatus;
+import com.zebra.sdk.printer.SGD;
+import com.zebra.sdk.printer.ZebraPrinter;
+import com.zebra.sdk.printer.ZebraPrinterFactory;
+import com.zebra.sdk.printer.ZebraPrinterLanguageUnknownException;
+import com.zebra.sdk.printer.ZebraPrinterLinkOs;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.charset.Charset;
+import java.text.DateFormat;
+import java.text.DecimalFormat;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.util.Arrays;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.List;
+import java.util.concurrent.ExecutionException;
+
+import pl.droidsonroids.gif.GifTextView;
+
+public class ExitPOS extends AppCompatActivity {
+
+    private static final String TAG = "TAG";
+    CoordinatorLayout exitLayout;
+    private final String[][] techList;
+    List<Constants> names;
+    Long numberOfHours;
+    Long numberOfMins;
+    List<SpinnerObject> parkTypeList;
+    Parktype_Model parkTypes;
+    List<Constants> chargeDetails;
+
+    private Tag tagCard;
+    private Connection connectionZebra = null;
+    SharedPreferences sharedPreferences;
+    String sessionUserID;
+    String sessionUserName;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_exit_pos);
+
+
+        Toolbar toolbar = (Toolbar) findViewById(R.id.toolbar);
+
+        toolbar.setTitle("ExitPOS");
+        toolbar.setBackgroundColor(Color.parseColor("#000000"));
+        toolbar.setTitleTextColor(getResources().getColor(android.R.color.white));
+        toolbar.setNavigationIcon(getResources().getDrawable(R.drawable.ic_arrow_back));
+        toolbar.setNavigationOnClickListener(new View.OnClickListener() {
+            public void onClick(View view) {
+                onBackPressed();
+            }
+        });
+
+        GlobalFunctions globalFunctions = new GlobalFunctions();
+        Parkinfo_Model parkInfo = new Parkinfo_Model(this);
+        Rateinfo_Model rateModel = new Rateinfo_Model(this);
+        Receipt_Model receiptModel = new Receipt_Model(this);
+
+        exitLayout = (CoordinatorLayout) findViewById(R.id.clExit);
+
+        RelativeLayout rlExit = (RelativeLayout) findViewById(R.id.rlExitPos);
+        TextView serialNumber = (TextView) findViewById(R.id.serialNumber);
+        TextView duration = (TextView) findViewById(R.id.duration);
+        //TextView succeedingCharge = (TextView) findViewById(R.id.succeedingCharge);
+        TextView timeIn = (TextView) findViewById(R.id.timeIn);
+        TextView timeOut = (TextView) findViewById(R.id.timeOut);
+        //TextView initialCharge = (TextView) findViewById(R.id.initialCharge);
+        //TextView flatRate = (TextView) findViewById(R.id.flatRate);
+        TextView totalAmount = (TextView) findViewById(R.id.totalAmount);
+
+        EditText plateNumber = (EditText) findViewById(R.id.plateNumber);
+        GifTextView swipeExitImage = (GifTextView) findViewById(R.id.scan);
+
+        Spinner spinnerParkTypes = (Spinner) findViewById(R.id.parkTypes);
+
+        spinnerParkTypes.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){
+
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                Integer parkID = parkTypeList.get(position).getId();
+                Long pID = parent.getSelectedItemId();
+
+                if (pID != null) {
+                    names = parkInfo.checkExitMifareExists(serialNumber.getText().toString().trim());
+                    Calendar c = Calendar.getInstance();
+                    SimpleDateFormat df = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+                    String formattedDate = df.format(c.getTime());
+                    DecimalFormat precision = new DecimalFormat("0.00");
+
+                    numberOfHours = globalFunctions.printDateDifferenceInHours(timeIn.getText().toString(), formattedDate);
+                    numberOfMins = globalFunctions.printDateDifferenceInMins(timeIn.getText().toString(), formattedDate);
+
+                    chargeDetails = rateModel.getParkerCharges(timeIn.getText().toString(), formattedDate, parkID);
+
+                    for (Constants constants : names) {
+                        duration.setText(globalFunctions.printDateDifference(constants.getEntryDate(), formattedDate));
+                    }
+
+                    totalAmount.setText(String.valueOf(precision.format(chargeDetails.get(0).getTotalCharges())));
+                }
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+
+            }
+        });
+
+        sharedPreferences = getSharedPreferences("myKey", MODE_PRIVATE);
+        sessionUserID = sharedPreferences.getString("sessionUserID","");
+        sessionUserName = sharedPreferences.getString("sessionUserName",null);
+
+        Button button = (Button) findViewById(R.id.button_bluetooth);
+        button.setOnClickListener(new View.OnClickListener() {
+            @RequiresApi(api = Build.VERSION_CODES.KITKAT)
+            @Override
+            public void onClick(View view) {
+
+                SimpleDateFormat df = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+                Calendar c = Calendar.getInstance();
+
+                String formattedDate = df.format(c.getTime());
+                numberOfMins = globalFunctions.printDateDifferenceInMins(timeIn.getText().toString(), formattedDate);
+
+                if(parkInfo.checkEntranceMifareExists(serialNumber.getText().toString())){
+
+                    String receiptNumber = String.format("%08d", new Object[]{receiptModel.getMaxReceiptCount()});
+                    String str = receiptNumber;
+                    Integer rnCount = receiptModel.getMaxReceiptCount();
+
+                    String pType;
+                    Integer pTypeID;
+
+                    if(numberOfMins > 15) {
+                        pType = spinnerParkTypes.getSelectedItem().toString();
+                        pTypeID = spinnerParkTypes.getSelectedItemPosition();
+                    } else {
+                        pType = spinnerParkTypes.getSelectedItem().toString()+" [G]";
+                        pTypeID = 0;
+                    }
+
+                    if(parkInfo.checkSuccessfulTrans(serialNumber.getText().toString())) {
+
+                        GlobalFunctions.snackBarDetails(exitLayout, Integer.valueOf(com.google.android.material.R.id.snackbar_text), Integer.valueOf(R.string.snackBar_error_exists_trans), "#FFFF00");
+
+                    } else {
+
+                        if (connectPrinterSetup(str, rnCount, pTypeID, pType, duration.getText().toString(), plateNumber.getText().toString(), serialNumber.getText().toString(), timeIn.getText().toString(), timeOut.getText().toString(), "0.00", "0.00").equals(1)) {
+
+                            parkInfo.updateExitDetails(plateNumber.getText().toString(), serialNumber.getText().toString(), pTypeID, str, duration.getText().toString(), "0.00", "0.00", "0.00", totalAmount.getText().toString(), Integer.valueOf(sessionUserID));
+
+                            GlobalFunctions.snackBarDetails(exitLayout, Integer.valueOf(com.google.android.material.R.id.snackbar_text), Integer.valueOf(R.string.snackBar_successful_trans), "#FFFF00");
+
+                            rlExit.setVisibility(View.GONE);
+                            swipeExitImage.setVisibility(View.VISIBLE);
+                             //writeTag(tagCard,1,4,"No Entry Data");
+
+
+                        } else {
+                            GlobalFunctions.snackBarDetails(exitLayout, Integer.valueOf(com.google.android.material.R.id.snackbar_text), Integer.valueOf(R.string.snackBar_error_printer_trans), "#FFFF00");
+                        }
+
+                    }
+
+                } else if(timeIn.getText().toString() != "") {
+
+                    String receiptNumber = String.format("%08d", new Object[]{receiptModel.getMaxReceiptCount()});
+                    Integer rnCount = receiptModel.getMaxReceiptCount();
+                    String str = receiptNumber;
+
+                    String pType;
+                    Integer pTypeID;
+
+                    if(numberOfMins > 15) {
+                        pType = spinnerParkTypes.getSelectedItem().toString();
+                        pTypeID = spinnerParkTypes.getSelectedItemPosition();
+                    } else {
+                        pType = spinnerParkTypes.getSelectedItem().toString()+" [G]";
+                        pTypeID = 0;
+                    }
+
+					// Add trap for multiple trans
+					 if(parkInfo.checkSuccessfulTrans(serialNumber.getText().toString())) {
+
+                            GlobalFunctions.snackBarDetails(exitLayout, Integer.valueOf(com.google.android.material.R.id.snackbar_text), Integer.valueOf(R.string.snackBar_error_exists_trans), "#FFFF00");
+
+                     } else {
+
+                         if (connectPrinterSetup(str, rnCount, pTypeID, pType, duration.getText().toString(), plateNumber.getText().toString(), serialNumber.getText().toString(), timeIn.getText().toString(), timeOut.getText().toString(), "0.00", totalAmount.getText().toString()).equals(1)) {
+
+                             parkInfo.insertEntranceWithCardOnlyDetails(plateNumber.getText().toString(), serialNumber.getText().toString(), pTypeID, Integer.valueOf(sessionUserID), receiptNumber, timeIn.getText().toString(), timeOut.getText().toString(), duration.getText().toString(), totalAmount.getText().toString());
+
+                             GlobalFunctions.snackBarDetails(exitLayout, Integer.valueOf(com.google.android.material.R.id.snackbar_text), Integer.valueOf(R.string.snackBar_successful_trans), "#FFFF00");
+                             //}
+
+                             rlExit.setVisibility(View.GONE);
+                             swipeExitImage.setVisibility(View.VISIBLE);
+
+                         } else {
+                             GlobalFunctions.snackBarDetails(exitLayout, Integer.valueOf(com.google.android.material.R.id.snackbar_text), Integer.valueOf(R.string.snackBar_error_printer_trans), "#FFFF00");
+                         }
+                     }
+
+                }
+
+            }
+
+
+        });
+
+
+       Log.d("Receipt Count ", String.valueOf("Original Count "+receiptModel.getMaxReceiptCount()));
+        /* receiptModel.updateReceiptCount(receiptModel.getMaxReceiptCount());
+        Log.d("Receipt Count ", String.valueOf("Replace Count "+receiptModel.getMaxReceiptCount()));*/
+
+        //deleteDataCardIntent(getIntent(),4,1,"");
+
+        Button cancelButton = (Button) findViewById(R.id.button_cancel);
+
+        cancelButton.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+
+
+                //Intent intentd = new Intent(v.getContext(), ExitPOS.class);
+                //deleteDataCardIntent(intentd,4,1,"");
+                finish();
+                startActivity(getIntent());
+            }
+        });
+
+
+        rlExit.setVisibility(View.GONE);
+        swipeExitImage.setVisibility(View.VISIBLE);
+        serialNumber.setEnabled(false);
+        plateNumber.setFocusable(true);
+        plateNumber.requestFocus();
+
+        NfcAdapter nfcAdapter = NfcAdapter.getDefaultAdapter(this);
+        if (!nfcAdapter.isEnabled()) {
+            nfcDialog();
+        }
+    }
+
+    public static final int PERMISSION_BLUETOOTH = 1;
+    public static final int PERMISSION_BLUETOOTH_ADMIN = 2;
+    public static final int PERMISSION_BLUETOOTH_CONNECT = 3;
+    public static final int PERMISSION_BLUETOOTH_SCAN = 4;
+
+    public Integer connectPrinterDefault(String receiptNumber, Integer receiptCount, Integer parkTypeID, String parkType, String duration, String plateNumber, String serialNumber, String timeIn, String timeOut, String cashOnHand, String totalCharge) {
+
+        writeTag(tagCard,1,4,"");
+
+        Integer status = 0;
+
+        // for grace period
+        if(parkTypeID.equals(0)) {
+            status = 1;
+        } else {
+            try {
+                if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH) != PackageManager.PERMISSION_GRANTED) {
+                    ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.BLUETOOTH}, this.PERMISSION_BLUETOOTH);
+                } else {
+                    BluetoothConnection connection = BluetoothPrintersConnections.selectFirstPaired();
+                    if (connection != null) {
+                        EscPosPrinter printer = new EscPosPrinter(connection, 203, 48f, 32);
+
+                        Settings_Model settingModel = new Settings_Model(this);
+                        Rateinfo_Model rateModel = new Rateinfo_Model(this);
+                        Receipt_Model receiptModel = new Receipt_Model(this);
+
+                        SharedPreferences sharedPreferences = getSharedPreferences("myKey", MODE_PRIVATE);
+                        String sessionUserID = sharedPreferences.getString("sessionUserID","");
+                        String sessionUserName = sharedPreferences.getString("sessionUserName","");
+
+                        Log.d("UserID ", sessionUserID);
+
+                        DecimalFormat precision = new DecimalFormat("0.00");
+
+                        chargeDetails = rateModel.getParkerCharges(timeIn, timeOut, parkTypeID);
+
+                        final String text = "" +
+                                "[L]\n" +
+                                "[L]\n" +
+                                "[C]" + settingModel.getSettingsSingle(0) + "\n" +
+                                "[C]" + settingModel.getSettingsSingle(2) + "\n" +
+                                "[C]VAT TIN #: " + settingModel.getSettingsSingle(5) + "\n" +
+                                "[C]MIN #: " + settingModel.getSettingsSingle(4) + "\n" +
+                                "[C]Serial #: " + settingModel.getSettingsSingle(3) + "\n" +
+                                "[L]\n" +
+                                "[L]Terminal: " + settingModel.getSettingsSingle(1) + "\n" +
+                                "[L]Cashier: "+sessionUserName+"\n" +
+                                //"[L]Parking Area: "+settingModel.getSettingsSingle(6)+"\n" +
+                                "[C]--------------------------------\n" +
+                                "[L]Invoice #: " + receiptNumber + "\n" +
+                                "[L]Card Code: " + serialNumber + "\n" +
+                                "[L]Plate #: " + plateNumber + "\n" +
+                                "[L]Parker Type: " + parkType + "\n" +
+                                "[L]In: " + timeIn + "\n" +
+                                "[L]Out: " + timeOut + "\n" +
+                                "[L]Duration: " + duration + "\n" +
+                                "[C]--------------------------------\n" +
+                                "[C]Computation\n" +
+                                "[L]Flat Rate [R] " + precision.format(chargeDetails.get(0).getFlatRate()) + "\n" +
+                                "[L]Settlement Type [R]Cash\n" +
+                                "[L]Taxable Amount [R]" + precision.format(chargeDetails.get(0).getTaxableAmount()) + "\n" +
+                                "[L]VAT [R]" + precision.format(chargeDetails.get(0).getVAT()) + "\n" +
+                                "[L]VAT Zero Rated [R]" + precision.format(chargeDetails.get(0).getVATZeroRated()) + "\n" +
+                                "[L]Net Amount Due [R]" + precision.format(chargeDetails.get(0).getTotalCharges()) + "\n" +
+                                "[L]Cash Tendered [R]" + precision.format(chargeDetails.get(0).getCashTendered()) + "\n" +
+                                "[L]Change [R]0.00\n" +
+                                "[L]Ref. No. [R]0.00\n" +
+                                "[C]--------------------------------\n" +
+                                "[C]Customer Info\n" +
+                                "[L]Customer Name [R]____________\n" +
+                                "[L]OSCA ID/Pwd No. [R]____________\n" +
+                                "[L]Address [R]____________\n" +
+                                "[L]TIN [R]____________\n" +
+                                //"[L]Business Type [R]____________\n" +
+                                "[L]Customer Sign [R]____________\n" +
+                                "[L]\n" +
+                                "[C]--------------------------------\n" +
+                                "[L]\n" +
+                                "[C]INTEGRATED PARKING SOLUTIONS INC\n" +
+                                "[C]UNIT 207 J&F BUILDING\n" +
+                                "[C]VV SOLIVEN III AVENUE\n" +
+                                "[C]BRGY. SAN ROQUE CAINTA RIZAL\n" +
+                                "[C]ACCREDITATION #: 1231414515\n" +
+                                //"[C]VALID UNTIL: October 2025\n" +
+                                "[C]TIN: 019-2391-12391\n" +
+                                "[C]BIR PTU NO: FDD123JFGS-123-02313\n" +
+                                "[C]VALID FROM: February 24, 2022\n" +
+                                //"[C]THIS RECEIPT SHALL BE VALID FOR \n" +
+                                //"[C]FIVE(5) YEARS FROM THE DATE\n" +
+                                //"[C]OF THE PERMIT TO USE\n" +
+                                "[L]\n" +
+                                "[C]THIS SERVES AS\n" +
+                                "[C]INVOICE\n" +
+                                "\n";
+                        //printer.printFormattedText(text);
+                        printer.printFormattedTextAndCut(text);
+                       /* connection.write(new byte[]{0x1D,
+                                0x56,
+                                66,
+                                0x00});
+                        connection.send();
+*/
+
+                        GlobalFunctions globalFunctions = new GlobalFunctions();
+                        // Write to text file
+                        globalFunctions.saveReceiptDetails(this, text.replace("[C]","").replace("[R]","").replace("[L]",""), settingModel.getSettingsSingle(1) + "-" + receiptNumber + ".txt");
+                        // Update receipt Count
+                        receiptModel.updateReceiptCount(receiptCount);
+
+                        connection.disconnect();
+
+                        status = 1;
+
+                    } else {
+                        Toast.makeText(this, "No printer was connected!", Toast.LENGTH_SHORT).show();
+
+                        status = 0;
+                    }
+                    return status;
+                }
+            } catch (Exception e) {
+                Toast.makeText(this, "No printer was connected!", Toast.LENGTH_SHORT).show();
+                Log.e("APP", "Can't print", e);
+                status = 0;
+            }
+        }
+
+        return status;
+    }
+
+    public void nfcDialog() {
+        new AlertDialog.Builder(this).setMessage("Turn on NFC?").setTitle("NFC Settings").setCancelable(false).setIcon(R.mipmap.ic_launcher).setPositiveButton("Ok", new DialogInterface.OnClickListener() {
+            public void onClick(DialogInterface dialog, int id) {
+                if (Build.VERSION.SDK_INT >= 16) {
+                    startActivity(new Intent("android.settings.NFC_SETTINGS"));
+                    return;
+                }
+                startActivity(new Intent("android.settings.WIRELESS_SETTINGS"));
+            }
+        }).show();
+    }
+
+    public ExitPOS() {
+        String[][] strArr = new String[1][];
+        strArr[0] = new String[]{MifareClassic.class.getName(), MifareUltralight.class.getName(), NfcA.class.getName(), IsoDep.class.getName(), NfcB.class.getName(), Ndef.class.getName(), NdefFormatable.class.getName() };
+        this.techList = strArr;
+    }
+
+    public void onNewIntent(Intent intent) {
+
+        super.onNewIntent(intent);
+
+        GlobalFunctions globalFunctions = new GlobalFunctions();
+        Parkinfo_Model parkInfo = new Parkinfo_Model(this);
+        Rateinfo_Model rateModel = new Rateinfo_Model(this);
+        parkTypes = new Parktype_Model(this);
+
+        GifTextView swipeExitImage = (GifTextView) findViewById(R.id.scan);
+        RelativeLayout rlExit = (RelativeLayout) findViewById(R.id.rlExitPos);
+        exitLayout = (CoordinatorLayout) findViewById(R.id.clExit);
+        EditText plateNumber = (EditText) findViewById(R.id.plateNumber);
+        TextView timeIn = (TextView) findViewById(R.id.timeIn);
+        TextView timeOut = (TextView) findViewById(R.id.timeOut);
+        TextView duration = (TextView) findViewById(R.id.duration);
+        //TextView initialCharge = (TextView) findViewById(R.id.initialCharge);
+        //TextView succeedingCharge = (TextView) findViewById(R.id.succeedingCharge);
+        //TextView succeedingCharge = (TextView) findViewById(R.id.succeedingCharge);
+        //TextView flatRate = (TextView) findViewById(R.id.flatRate);
+        TextView totalAmount = (TextView) findViewById(R.id.totalAmount);
+        Spinner spinnerParkTypes = (Spinner) findViewById(R.id.parkTypes);
+
+        parkTypeList = parkTypes.getParkTypes();
+        ArrayAdapter<SpinnerObject> dataAdapter = new ArrayAdapter(this, android.R.layout.simple_list_item_1, parkTypeList);
+        dataAdapter.insert(new SpinnerObject(0, "-- Please select --"), 0);
+        dataAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        spinnerParkTypes.setAdapter(dataAdapter);
+        spinnerParkTypes.setSelection(1);
+
+        Calendar c = Calendar.getInstance();
+        SimpleDateFormat df = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+        String formattedDate = df.format(c.getTime());
+
+        if(parkInfo.checkSuccessfulTrans(globalFunctions.ByteArrayToHexString(intent.getByteArrayExtra("android.nfc.extra.ID")))) {
+
+            GlobalFunctions.snackBarDetails(exitLayout, Integer.valueOf(com.google.android.material.R.id.snackbar_text), Integer.valueOf(R.string.snackBar_error_exists_trans), "#FFFF00");
+
+        } else if (parkInfo.checkEntranceMifareExists(globalFunctions.ByteArrayToHexString(intent.getByteArrayExtra("android.nfc.extra.ID")))) {
+
+             names = parkInfo.checkExitMifareExists(globalFunctions.ByteArrayToHexString(intent.getByteArrayExtra("android.nfc.extra.ID")));
+             for (Constants cons : names) {
+                 numberOfHours = globalFunctions.printDateDifferenceInHours(cons.getEntryDate(), formattedDate);
+                 numberOfMins = globalFunctions.printDateDifferenceInMins(cons.getEntryDate(), formattedDate);
+
+                 DecimalFormat precision = new DecimalFormat("0.00");
+
+                 chargeDetails = rateModel.getParkerCharges(cons.getEntryDate(), formattedDate, 1);
+
+                 plateNumber.setText(cons.getPlateNumber());
+                 timeIn.setText(cons.getEntryDate());
+                 timeOut.setText(formattedDate);
+                 totalAmount.setText(String.valueOf(chargeDetails.get(0).getTotalCharges()));
+             }
+
+             rlExit.setVisibility(View.VISIBLE);
+             swipeExitImage.setVisibility(View.GONE);
+             ((TextView) findViewById(R.id.serialNumber)).setText(globalFunctions.ByteArrayToHexString(intent.getByteArrayExtra("android.nfc.extra.ID")));
+
+         } else if(getDataCardIntent(intent,getApplicationContext(), 4, 1) != null || !getDataCardIntent(intent,getApplicationContext(), 4, 1).isEmpty() ) {
+        //} else if(getDataCardIntent(intent,getApplicationContext(), 4, 1).equals("")) {
+
+            DateFormat inputTime = new SimpleDateFormat("yyyyMMddHHmmss");
+            DateFormat outputTime = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+
+            Date date = null;
+            try {
+                date = inputTime.parse(getDataCardIntent(intent,getApplicationContext(), 4, 1));
+
+                //Toast.makeText(this, "Value Date: "+date, Toast.LENGTH_SHORT).show();
+
+                chargeDetails = rateModel.getParkerCharges(outputTime.format(date), formattedDate, 1);
+
+                plateNumber.setText(plateNumber.getText().toString());
+                timeIn.setText(outputTime.format(date));
+                timeOut.setText(formattedDate);
+
+                duration.setText(globalFunctions.printDateDifference(outputTime.format(date), formattedDate));
+                rlExit.setVisibility(View.VISIBLE);
+                swipeExitImage.setVisibility(View.GONE);
+                ((TextView) findViewById(R.id.serialNumber)).setText(globalFunctions.ByteArrayToHexString(intent.getByteArrayExtra("android.nfc.extra.ID")));
+
+            } catch (ParseException e) {
+
+                GlobalFunctions.snackBarDetails(exitLayout, Integer.valueOf(com.google.android.material.R.id.snackbar_text), Integer.valueOf(R.string.snackBar_error_read), "#FFFF00");
+
+                e.printStackTrace();
+            }
+
+
+        } else {
+
+            GlobalFunctions.snackBarDetails(exitLayout, Integer.valueOf(com.google.android.material.R.id.snackbar_text), Integer.valueOf(R.string.snackBar_no_entrance_exists), "#FFFF00");
+
+        }
+
+
+        setIntent(intent);
+        if (NfcAdapter.ACTION_TECH_DISCOVERED.equals(getIntent().getAction())) {
+            tagCard = getIntent().getParcelableExtra(NfcAdapter.EXTRA_TAG);
+        }
+
+
+
+    }
+
+    public void onResume() {
+        super.onResume();
+        PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, new Intent(this, getClass()).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), 0);
+        IntentFilter filter = new IntentFilter();
+        filter.addAction("android.nfc.action.TAG_DISCOVERED");
+        filter.addAction("android.nfc.action.NDEF_DISCOVERED");
+        filter.addAction("android.nfc.action.TECH_DISCOVERED");
+        NfcAdapter.getDefaultAdapter(this).enableForegroundDispatch(this, pendingIntent, new IntentFilter[]{filter}, this.techList);
+    }
+
+    public void onPause() {
+        super.onPause();
+        NfcAdapter.getDefaultAdapter(this).disableForegroundDispatch(this);
+    }
+
+    public String getDataCardIntent(Intent intent, Context context, Integer blockIndex, Integer sectorIndex) {
+
+        String action = intent.getAction();
+        String timeInText = "";
+
+        Tag tagMifare = intent.getParcelableExtra(NfcAdapter.EXTRA_TAG);
+        Log.i("Tag List", Arrays.toString(tagMifare.getTechList()));
+
+        if(NfcAdapter.ACTION_TECH_DISCOVERED.equals(action) ||
+                NfcAdapter.ACTION_TAG_DISCOVERED.equals(action) ||
+                NfcAdapter.ACTION_NDEF_DISCOVERED.equals(action)
+        ) {
+
+            MifareClassic mfc = MifareClassic.get(tagMifare);
+
+            try {
+                mfc.connect();
+
+                Boolean authenticationA = mfc.authenticateSectorWithKeyA(sectorIndex, MifareClassic.KEY_NFC_FORUM);
+                Boolean authenticationB = mfc.authenticateSectorWithKeyB(sectorIndex, MifareClassic.KEY_DEFAULT);
+
+                Log.i("Auth A ", "a: "+ authenticationA);
+                Log.i("Auth B ", "b: "+ authenticationB);
+
+                if(authenticationA || authenticationB) {
+                    /*byte[] cWrite = new byte[16];
+                    byte[] sString = textV.getBy tes(Charset.forName("UTF-8"));
+                    System.arraycopy(sString, 0, cWrite, 0, sString.length);
+                    mfc.writeBlock(blockIndex, cWrite);
+                    Log.i("Write ", "write: "+ Arrays.toString(cWrite));
+                    */
+
+                    byte[] cRead = mfc.readBlock(blockIndex);
+                    String str = new String(cRead, Charset.forName("UTF-8"));
+                    Log.i("hey", "read bytes : " + Arrays.toString(cRead));
+                    Log.i("hey", "read string : " + str);
+                    //Toast.makeText(context, "read : " + str, Toast.LENGTH_SHORT).show();
+                    str = str.replaceAll("[\u0000-\u001f]", "");
+                    timeInText = str;
+                }
+                mfc.close();
+
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+
+        } else {
+            Log.i("Tag Null", "Null Why?");
+            timeInText = "";
+        }
+
+        return timeInText;
+
+    }
+
+    private synchronized void writeTag(Tag tag, Integer sectorIndex, Integer blockIndex, String textValue){
+
+        //if(tag !=null){
+            try {
+                String[] myParams = {String.valueOf(sectorIndex), String.valueOf(blockIndex),textValue};
+                new WriteEmptyTag().execute(myParams).get();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            } catch (ExecutionException e) {
+                e.printStackTrace();
+            }
+            //tag=null;
+        //}
+    }
+
+    private class WriteEmptyTag extends AsyncTask<String, Void, Boolean>{
+
+        protected void onPostExecute(Boolean result) {
+            super.onPostExecute(result);
+            String message = (result) ? "EMPTYING CARD DETAILS" : "ERROR";
+            Toast.makeText(ExitPOS.this, message , Toast.LENGTH_SHORT).show();
+        }
+
+        @Override
+        protected Boolean doInBackground(String... params) {
+
+            Integer sectorIndex,blockIndex;
+            String textValue;
+
+            sectorIndex= Integer.valueOf(params[0]);
+            blockIndex= Integer.valueOf(params[1]);
+            textValue=params[2];
+
+            tagCard = getIntent().getParcelableExtra(NfcAdapter.EXTRA_TAG);
+
+            try {
+                MifareClassic mfc = MifareClassic.get(tagCard);
+
+                mfc.connect();
+
+                Boolean authenticationA = mfc.authenticateSectorWithKeyA(sectorIndex, MifareClassic.KEY_NFC_FORUM);
+                Boolean authenticationB = mfc.authenticateSectorWithKeyB(sectorIndex, MifareClassic.KEY_DEFAULT);
+
+                Log.i("Auth A ", "a: "+ authenticationA);
+                Log.i("Auth B ", "b: "+ authenticationB);
+
+                if(authenticationA || authenticationB) {
+                    byte[] cWrite = new byte[16];
+                    byte[] sString = textValue.getBytes(Charset.forName("UTF-8"));
+                    System.arraycopy(sString, 0, cWrite, 0, sString.length);
+                    mfc.writeBlock(blockIndex, cWrite);
+                    Log.i("Write ", "write: "+ Arrays.toString(cWrite));
+                }
+
+                mfc.close();
+
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+
+          return true;
+        }
+    }
+
+    public Integer connectPrinterSetup(String receiptNumber, Integer receiptCount, Integer parkTypeID, String parkType, String duration, String plateNumber, String serialNumber, String timeIn, String timeOut, String cashOnHand, String totalCharge) {
+
+        Settings_Model settingsModel = new Settings_Model(this);
+
+        Integer resultStatus = 0;
+        //48:A4:93:8E:4E:57
+        if(settingsModel.isFieldExists("tbl_ipark_pos_settings","zebraMacAddress")) {
+            if(settingsModel.getSettingsSingle(6).equals("")) {
+                resultStatus = connectPrinterDefault(receiptNumber, receiptCount, parkTypeID, parkType, duration, plateNumber, serialNumber, timeIn, timeOut, cashOnHand, totalCharge);
+            } else {
+                resultStatus = connectPrinterZebra(settingsModel.getSettingsSingle(6), receiptNumber, receiptCount, parkTypeID, parkType, duration, plateNumber, serialNumber, timeIn, timeOut, cashOnHand, totalCharge);
+            }
+        } else {
+            resultStatus = connectPrinterDefault(receiptNumber, receiptCount, parkTypeID, parkType, duration, plateNumber, serialNumber, timeIn, timeOut, cashOnHand, totalCharge);
+        }
+        return resultStatus;
+    }
+
+    /**
+     * For Zebra Printers
+     * @param printer
+     * @param receiptNumber
+     * @param receiptCount
+     * @param parkTypeID
+     * @param parkType
+     * @param duration
+     * @param plateNumber
+     * @param serialNumber
+     * @param timeIn
+     * @param timeOut
+     * @param cashOnHand
+     * @param totalCharge
+     */
+    private void sendFile(ZebraPrinter printer,String receiptNumber, Integer receiptCount, Integer parkTypeID, String parkType, String duration, String plateNumber, String serialNumber, String timeIn, String timeOut, String cashOnHand, String totalCharge) {
+
+        try {
+            File filepath = getFileStreamPath("PARKINGPOS.LBL");
+            createFile(printer, "PARKINGPOS.LBL",receiptNumber, receiptCount, parkTypeID, parkType, duration, plateNumber, serialNumber, timeIn, timeOut, cashOnHand, totalCharge);
+            printer.sendFileContents(filepath.getAbsolutePath());
+
+            Receipt_Model receiptModel = new Receipt_Model(this);
+            // Write to text file
+            //globalFunctions.saveReceiptDetails(this, text.replace("[C]","").replace("[R]","").replace("[L]",""), settingModel.getSettingsSingle(1) + "-" + receiptNumber + ".txt");
+            // Update receipt Count
+            receiptModel.updateReceiptCount(receiptCount);
+
+        } catch (ConnectionException e1) {
+            Toast.makeText(this, "Error on sending details to printer.", Toast.LENGTH_SHORT).show();
+            //helper.showErrorDialogOnGuiThread("Error sending file to printer");
+        } catch (IOException e) {
+            Toast.makeText(this, "Error on printing the details", Toast.LENGTH_SHORT).show();
+            //helper.showErrorDialogOnGuiThread("Error creating file");
+        }
+
+    }
+
+    private void createFile(ZebraPrinter printer, String fileName,String receiptNumber, Integer receiptCount, Integer parkTypeID, String parkType, String duration, String plateNumber, String serialNumber, String timeIn, String timeOut, String cashOnHand, String totalCharge) throws IOException {
+
+        Settings_Model settingModel = new Settings_Model(this);
+        Rateinfo_Model rateModel = new Rateinfo_Model(this);
+        Receipt_Model receiptModel = new Receipt_Model(this);
+
+        SharedPreferences sharedPreferences = getSharedPreferences("myKey", MODE_PRIVATE);
+        String sessionUserID = sharedPreferences.getString("sessionUserID","");
+        String sessionUserName = sharedPreferences.getString("sessionUserName","");
+
+        Log.d("UserID ", sessionUserID);
+
+        DecimalFormat precision = new DecimalFormat("0.00");
+
+        chargeDetails = rateModel.getParkerCharges(timeIn, timeOut, parkTypeID);
+
+        FileOutputStream os = openFileOutput(fileName, Context.MODE_PRIVATE);
+
+        byte[] configLabel = null;
+
+        PrinterLanguage pl = printer.getPrinterControlLanguage();
+        String wordToPrint = "";
+
+        if (pl == PrinterLanguage.ZPL) {
+
+            wordToPrint += "^XA" +
+                    "^LL2000" +
+                    "^LH0,20^POI" +
+                    "^FX" +
+                    "^CF0,30" +
+                    "^FT0,55^FB600,,,C^FD" + settingModel.getSettingsSingle(0) + "^FS" +
+                    "^FT0,95^FB600,,,C^FD" + settingModel.getSettingsSingle(2) + "^FS" +
+                    "^FX" +
+                    "^CF0,25" +
+                    "^FO0,125^FB600,,,C^FDVAT TIN #: " + settingModel.getSettingsSingle(5) + "^FS" +
+                    "^FO0,165^FB600,,,C^FDMIN #: " + settingModel.getSettingsSingle(4) + "^FS" +
+                    "^FO0,205^FB600,,,C^FDSerial #: " + settingModel.getSettingsSingle(3) + "^FS" +
+                    "^FX" +
+                    "^CFA,20" +
+                    "^FO50,300^FDTerminal: " + settingModel.getSettingsSingle(1) + "^FS" +
+                    "^FO50,340^FDCashier: " + sessionUserName + " ^FS" +
+                    "^FO50,380^FD------------------------------------------^FS" +
+                    "^FO50,420^FDInvoice #: " + receiptNumber + "^FS" +
+                    "^FO50,460^FDCard Code: " + serialNumber + "^FS" +
+                    "^FO50,500^FDPlate No: " + plateNumber + "^FS" +
+                    "^FO50,540^FDParker Type: " + parkType + "^FS" +
+                    "^FO50,580^FDIn: " + timeIn + "^FS" +
+                    "^FO50,620^FDOut: " + timeOut + "^FS" +
+                    "^FO50,660^FDDuration: " + duration + "^FS" +
+                    "^FO50,700^FD------------------------------------------^FS" +
+                    "^FX" +
+                    "^FO50,740^FDComputation^FS" +
+                    "^FO50,780^FDFlat Rate [R] " + precision.format(chargeDetails.get(0).getFlatRate()) + "^FS" +
+                    "^FO50,820^FDSettlement Type [R] Cash^FS" +
+                    "^FO50,860^FDTaxable Amount [R] " + precision.format(chargeDetails.get(0).getTaxableAmount()) + "^FS" +
+                    "^FO50,900^FDVAT [R] " + precision.format(chargeDetails.get(0).getVAT()) + "^FS" +
+                    "^FO50,940^FDVAT Zero Rated [R] " + precision.format(chargeDetails.get(0).getVATZeroRated()) + "^FS" +
+                    "^FO50,980^FDNet Amount Due [R] " + precision.format(chargeDetails.get(0).getTotalCharges()) + "^FS" +
+                    "^FO50,1020^FDCash Tendered [R] " + precision.format(chargeDetails.get(0).getCashTendered()) + "^FS" +
+                    "^FO50,1060^FDChange [R] 0.00^FS" +
+                    "^FO50,1100^FDRef. No. [R] 0.00^FS" +
+                    "^FO50,1140^FD------------------------------------------^FS" +
+                    "^FX" +
+                    "^FO50,1180^FDCustomer Info^FS" +
+                    "^FO50,1220^FDCustomer Name [R]______________________^FS" +
+                    "^FO50,1260^FDOSCA ID/Pwd No. [R]______________________^FS" +
+                    "^FO50,1300^FDAddress [R]______________________^FS" +
+                    "^FO50,1340^FDTIN [R]______________________^FS" +
+                    //"^FO50,1380^FDBusiness Type [R]______________________^FS" +
+                    "^FO50,1420^FDCustomer Sign [R]______________________^FS" +
+                    "^FO50,1460^FD------------------------------------------^FS" +
+                    "^FX" +
+                    "^FO0,1500 ^FB600,,,C^FDINTEGRATED PARKING SOLUTIONS INC.,^FS" +
+                    "^FO0,1540 ^FB600,,,C^FDUNIT 207 J&F BUILDING^FS" +
+                    "^FO0,1580 ^FB600,,,C^FDVV SOLIVEN III AVENUE^FS" +
+                    "^FO0,1620 ^FB600,,,C^FDBRGY. SAN ROQUE CAINTA RIZAL^FS" +
+                    "^FO0,1660 ^FB600,,,C^FDACCREDITATION #: 1231414515^FS" +
+                    "^FO0,1700 ^FB600,,,C^FDTIN: 019-2391-12391^FS" +
+                    "^FO0,1740 ^FB600,,,C^FDBIR PTU NO: FDD123JFGS-123-02313^FS" +
+                    "^FO0,1780 ^FB600,,,C^FDVALID FROM: February 24, 2022^FS" +
+                    "^FO0,1820 ^FD^FS" +
+                    "^FO0,1860 ^FB600,,,C^FDTHIS SERVES AS INVOICE^FS" +
+                    "^XZ" + // End of ZPL content
+                    "! U1 SPEED 5\n" +
+                    "! U1 setvar \"media.type\" \"journal\"\n" +
+                    "! U1 getvar \"zpl.label_length\"\n" +
+                    "! U1 setvar \"zpl.label_length\" \"2000\"\n" +
+                    "~JS20^JUS";
+
+        configLabel = wordToPrint.getBytes();
+
+            GlobalFunctions globalFunctions = new GlobalFunctions();
+
+            String text = "" +
+                    "[L]\n" +
+                    "[L]\n" +
+                    "[C]" + settingModel.getSettingsSingle(0) + "\n" +
+                    "[C]" + settingModel.getSettingsSingle(2) + "\n" +
+                    "[C]VAT TIN #: " + settingModel.getSettingsSingle(5) + "\n" +
+                    "[C]MIN #: " + settingModel.getSettingsSingle(4) + "\n" +
+                    "[C]Serial #: " + settingModel.getSettingsSingle(3) + "\n" +
+                    "[L]\n" +
+                    "[L]Terminal: " + settingModel.getSettingsSingle(1) + "\n" +
+                    "[L]Cashier: "+sessionUserName+"\n" +
+                    //"[L]Parking Area: "+settingModel.getSettingsSingle(6)+"\n" +
+                    "[C]--------------------------------\n" +
+                    "[L]Invoice #: " + receiptNumber + "\n" +
+                    "[L]Card Code: " + serialNumber + "\n" +
+                    "[L]Plate #: " + plateNumber + "\n" +
+                    "[L]Parker Type: " + parkType + "\n" +
+                    "[L]In: " + timeIn + "\n" +
+                    "[L]Out: " + timeOut + "\n" +
+                    "[L]Duration: " + duration + "\n" +
+                    "[C]--------------------------------\n" +
+                    "[C]Computation\n" +
+                    "[L]Flat Rate [R] " + precision.format(chargeDetails.get(0).getFlatRate()) + "\n" +
+                    "[L]Settlement Type [R]Cash\n" +
+                    "[L]Taxable Amount [R]" + precision.format(chargeDetails.get(0).getTaxableAmount()) + "\n" +
+                    "[L]VAT [R]" + precision.format(chargeDetails.get(0).getVAT()) + "\n" +
+                    "[L]VAT Zero Rated [R]" + precision.format(chargeDetails.get(0).getVATZeroRated()) + "\n" +
+                    "[L]Net Amount Due [R]" + precision.format(chargeDetails.get(0).getTotalCharges()) + "\n" +
+                    "[L]Cash Tendered [R]" + precision.format(chargeDetails.get(0).getCashTendered()) + "\n" +
+                    "[L]Change [R]0.00\n" +
+                    "[L]Ref. No. [R]0.00\n" +
+                    "[C]--------------------------------\n" +
+                    "[C]Customer Info\n" +
+                    "[L]Customer Name [R]____________\n" +
+                    "[L]OSCA ID/Pwd No. [R]____________\n" +
+                    "[L]Address [R]____________\n" +
+                    "[L]TIN [R]____________\n" +
+                    //"[L]Business Type [R]____________\n" +
+                    "[L]Customer Sign [R]____________\n" +
+                    "[L]\n" +
+                    "[C]--------------------------------\n" +
+                    "[L]\n" +
+                    "[C]INTEGRATED PARKING SOLUTIONS INC\n" +
+                    "[C]UNIT 207 J&F BUILDING\n" +
+                    "[C]VV SOLIVEN III AVENUE\n" +
+                    "[C]BRGY. SAN ROQUE CAINTA RIZAL\n" +
+                    "[C]ACCREDITATION #: 1231414515\n" +
+                    //"[C]VALID UNTIL: October 2025\n" +
+                    "[C]TIN: 019-2391-12391\n" +
+                    "[C]BIR PTU NO: FDD123JFGS-123-02313\n" +
+                    "[C]VALID FROM: February 24, 2022\n" +
+                    //"[C]THIS RECEIPT SHALL BE VALID FOR \n" +
+                    //"[C]FIVE(5) YEARS FROM THE DATE\n" +
+                    //"[C]OF THE PERMIT TO USE\n" +
+                    "[L]\n" +
+                    "[C]THIS SERVES AS INVOICE\n" +
+                    "[C]RECEIPT\n" +
+                    "\n";
+
+            globalFunctions.saveReceiptDetails(this, text.replace("[C]","").replace("[R]","").replace("[L]",""), settingModel.getSettingsSingle(1) + "-ZEBRA-" + receiptNumber + ".txt");
+
+        } else if (pl == PrinterLanguage.CPCL) {
+            String cpclConfigLabel = "! 0 200 200 406 1\r\n" + "ON-FEED IGNORE\r\n" + "BOX 20 20 380 380 8\r\n" + "T 0 6 137 177 TEST\r\n" + "PRINT\r\n";
+            configLabel = cpclConfigLabel.getBytes();
+        }
+        os.write(configLabel);
+        os.flush();
+        os.close();
+    }
+
+    private Integer connectPrinterZebra(String macAddress,String receiptNumber, Integer receiptCount, Integer parkTypeID, String parkType, String duration, String plateNumber, String serialNumber, String timeIn, String timeOut, String cashOnHand, String totalCharge) {
+
+        writeTag(tagCard,1,4,"");
+
+        Integer status = 0;
+
+        // for grace period
+        if(parkTypeID.equals(0)) {
+            status = 1;
+        } else {
+            connectionZebra = new com.zebra.sdk.comm.BluetoothConnection(macAddress);
+
+            try
+            {
+                connectionZebra.open();
+                ZebraPrinter printer = ZebraPrinterFactory.getInstance(connectionZebra);
+                ZebraPrinterLinkOs linkOsPrinter = ZebraPrinterFactory.createLinkOsPrinter(printer);
+                PrinterStatus printerStatus = (linkOsPrinter != null) ? linkOsPrinter.getCurrentStatus() : printer.getCurrentStatus();
+                getPrinterStatus();
+
+                if (printerStatus.isReadyToPrint) {
+                    //testSendFile(printer);
+                    sendFile(printer, receiptNumber, receiptCount, parkTypeID, parkType, duration, plateNumber, serialNumber, timeIn, timeOut, cashOnHand, totalCharge);
+                    status = 1;
+                } else if (printerStatus.isHeadOpen) {
+                    Toast.makeText(this, "Please close zebra printer head to print.", Toast.LENGTH_SHORT).show();
+                    status = 0;
+                    //helper.showErrorDialogOnGuiThread("Head Open \nPlease Close Printer Head to Print.");
+                } else if (printerStatus.isPaused) {
+                    Toast.makeText(this, "Zebra printer was paused.", Toast.LENGTH_SHORT).show();
+                    status = 0;
+                    //helper.showErrorDialogOnGuiThread("Printer Paused.");
+                } else if (printerStatus.isPaperOut) {
+                    Toast.makeText(this, "Please load media to print.", Toast.LENGTH_SHORT).show();
+                    status = 0;
+                    //helper.showErrorDialogOnGuiThread("Media Out \nPlease Load Media to Print.");
+                }
+                connectionZebra.close();
+
+            } catch (ConnectionException e) {
+                status = 0;
+                Toast.makeText(this, e.getMessage(), Toast.LENGTH_SHORT).show();
+                //helper.showErrorDialogOnGuiThread(e.getMessage());
+            } catch (ZebraPrinterLanguageUnknownException e) {
+                Toast.makeText(this, e.getMessage(), Toast.LENGTH_SHORT).show();
+                //helper.showErrorDialogOnGuiThread(e.getMessage());
+                status = 0;
+            }
+
+        }
+        return status;
+    }
+
+    private void getPrinterStatus() throws ConnectionException {
+
+        final String printerLanguage = SGD.GET("device.languages", connectionZebra);
+
+        final String displayPrinterLanguage = "Printer Language is " + printerLanguage;
+
+        SGD.SET("device.languages", "hybrid_xml_zpl", connectionZebra);
+
+        ExitPOS.this.runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+
+                //Toast.makeText(ExitPOS.this, displayPrinterLanguage + "\n" + "Language set to ZPL", Toast.LENGTH_LONG).show();
+
+            }
+        });
+
+
+    }
+
+}
+
